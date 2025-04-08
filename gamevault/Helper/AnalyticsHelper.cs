@@ -66,10 +66,7 @@ namespace gamevault.Helper
         private bool trackingEnabled = false;
         internal AnalyticsHelper()
         {
-            trackingEnabled = SettingsViewModel.Instance.SendAnonymousAnalytics;
-#if DEBUG
-            trackingEnabled = false;
-#endif
+            trackingEnabled = false; // SettingsViewModel.Instance.SendAnonymousAnalytics;
             if (!trackingEnabled)
                 return;
 
