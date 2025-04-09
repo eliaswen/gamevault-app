@@ -368,3 +368,6 @@ FodyWeavers.xsd
 
 # Generated Stuff
 Generated/
+info.txt
+setup.iss
+Output/gamevault-setup.exe
