@@ -12,6 +12,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media.Animation;
 
 namespace gamevault.UserControls
 {
@@ -19,6 +20,10 @@ namespace gamevault.UserControls
     {
         private CommunityViewModel ViewModel { get; set; }
         private int forceShowId = -1;
+
+        private Storyboard skeletonAnimation;
+        private List<Storyboard> runningSkeletonAnimations = new List<Storyboard>();
+        private List<Border> skeletonBorders = new List<Border>();
         public CommunityUserControl()
         {
             InitializeComponent();
@@ -38,6 +43,7 @@ namespace gamevault.UserControls
             {
                 try
                 {
+                    InitUserLoadingAnimation();
                     await InitUserList();
                 }
                 catch
@@ -46,11 +52,64 @@ namespace gamevault.UserControls
                 }
             }
         }
+        private void InitUserLoadingAnimation()
+        {
+            try
+            {
+                if (skeletonAnimation != null)
+                    return;  //Already initialized
+
+                ViewModel.LoadingUser = true;
+                skeletonAnimation = (Storyboard)FindResource("SkeletonLoadingAnimation");
+                Style? skeletonBorderStyle = FindResource("SkeletonBorderStyle") as Style;
+                foreach (var border in VisualHelper.FindVisualChildren<Border>(LoadingPlaceholder))
+                {
+                    if (border.Style == skeletonBorderStyle)
+                    {
+                        skeletonBorders.Add(border);
+                    }
+                }
+                if (skeletonAnimation != null)
+                {
+                    foreach (var border in skeletonBorders)
+                    {
+                        skeletonAnimation = skeletonAnimation.Clone();
+                        Storyboard.SetTarget(skeletonAnimation, border);
+                        skeletonAnimation.Begin(border, true);
+                        runningSkeletonAnimations.Add(skeletonAnimation);
+                    }
+                    LoadingPlaceholder.Visibility = Visibility.Visible;
+                }
+            }
+            catch { }
+        }
+        private void LoadingPlaceholder_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            if (skeletonAnimation == null)
+                return;
+
+
+            Visibility visibility = ((FrameworkElement)sender).Visibility;
+            if (visibility == Visibility.Collapsed)
+            {
+                for (int i = 0; i < runningSkeletonAnimations.Count; i++)
+                {
+                    runningSkeletonAnimations[i].Pause(skeletonBorders[i]);
+                }
+            }
+            else if (visibility == Visibility.Visible)
+            {
+                for (int i = 0; i < runningSkeletonAnimations.Count; i++)
+                {
+                    runningSkeletonAnimations[i].Resume(skeletonBorders[i]);
+                }
+            }
+        }
         public async Task InitUserList()
         {
-            string result = await WebHelper.GetRequestAsync(@$"{SettingsViewModel.Instance.ServerUrl}/api/users");
+            string result = await WebHelper.GetAsync(@$"{SettingsViewModel.Instance.ServerUrl}/api/users");
             var users = JsonSerializer.Deserialize<User[]>(result);
-            users = BringCurrentUserToTop(users);
+            users = BringCurrentUserToTop(users?.Where(u => u.DeletedAt == null)?.ToArray());
             //Log server user count only on the first time its set
             if (ViewModel.Users == null)
             {
@@ -125,12 +184,15 @@ namespace gamevault.UserControls
                 {
                     selectedUserId = ((User)e.AddedItems[0]).ID;
                 }
-                ViewModel.CurrentShownUser = await Task<User>.Run(() =>
+                ViewModel.LoadingUser = true;
+                string userUrl = @$"{SettingsViewModel.Instance.ServerUrl}/api/users/{selectedUserId}";
+                if (selectedUserId == LoginManager.Instance.GetCurrentUser()?.ID)
                 {
-                    string currentShownUser = WebHelper.GetRequest(@$"{SettingsViewModel.Instance.ServerUrl}/api/users/{selectedUserId}");
-                    return JsonSerializer.Deserialize<User>(currentShownUser);
-                });
-
+                    userUrl = @$"{SettingsViewModel.Instance.ServerUrl}/api/users/me";
+                }
+                string currentShownUser = await WebHelper.GetAsync(userUrl);
+                ViewModel.CurrentShownUser = JsonSerializer.Deserialize<User>(currentShownUser);
+                ViewModel.LoadingUser = false;
                 string lastSort = TryGetLastProgressSort();
                 if (uiSortBy.SelectedValue?.ToString()?.Replace("\"", "") == lastSort)
                 {
@@ -142,11 +204,15 @@ namespace gamevault.UserControls
                 }
 
             }
-            catch (Exception ex) { MainWindowViewModel.Instance.AppBarText = WebExceptionHelper.TryGetServerMessage(ex); }
+            catch (Exception ex)
+            {
+                ViewModel.LoadingUser = false;
+                MainWindowViewModel.Instance.AppBarText = WebExceptionHelper.TryGetServerMessage(ex);
+            }
         }
         private string TryGetLastProgressSort()
         {
-            string result = Preferences.Get(AppConfigKey.LastCommunitySortBy, AppFilePath.UserFile);
+            string result = Preferences.Get(AppConfigKey.LastCommunitySortBy, LoginManager.Instance.GetUserProfile().UserConfigFile);
             try
             {
                 if (!string.IsNullOrWhiteSpace(result) && ViewModel.SortBy.Contains(result))
@@ -198,7 +264,7 @@ namespace gamevault.UserControls
             }
             if (sender != null)
             {
-                Preferences.Set(AppConfigKey.LastCommunitySortBy, uiSortBy.SelectedValue.ToString().Replace("\"", ""), AppFilePath.UserFile);
+                Preferences.Set(AppConfigKey.LastCommunitySortBy, uiSortBy.SelectedValue.ToString().Replace("\"", ""), LoginManager.Instance.GetUserProfile().UserConfigFile);
             }
         }
 
@@ -225,12 +291,13 @@ namespace gamevault.UserControls
             try
             {
                 int currentUserId = ViewModel.CurrentShownUser.ID;
-                ViewModel.CurrentShownUser = await Task<User>.Run(() =>
+                string userUrl = @$"{SettingsViewModel.Instance.ServerUrl}/api/users/{currentUserId}";
+                if (currentUserId == LoginManager.Instance.GetCurrentUser()?.ID)
                 {
-                    string currentShownUser = WebHelper.GetRequest(@$"{SettingsViewModel.Instance.ServerUrl}/api/users/{currentUserId}");
-                    return JsonSerializer.Deserialize<User>(currentShownUser);
-                });
-
+                    userUrl = @$"{SettingsViewModel.Instance.ServerUrl}/api/users/me";
+                }
+                string currentShownUser = await WebHelper.GetAsync(userUrl);
+                ViewModel.CurrentShownUser = JsonSerializer.Deserialize<User>(currentShownUser);
                 SortBy_SelectionChanged(null, new SelectionChangedEventArgs(System.Windows.Controls.Primitives.Selector.SelectionChangedEvent, new List<string>(), new List<string> { uiSortBy.SelectedValue.ToString() }));
 
             }
@@ -254,7 +321,7 @@ namespace gamevault.UserControls
                     "", MessageDialogStyle.AffirmativeAndNegative, new MetroDialogSettings() { AffirmativeButtonText = "Yes", NegativeButtonText = "No", AnimateHide = false });
                 if (result == MessageDialogResult.Affirmative)
                 {
-                    WebHelper.Delete(@$"{SettingsViewModel.Instance.ServerUrl}/api/progresses/user/{ViewModel?.CurrentShownUser?.ID}/game/{dataContext?.Game.ID}");
+                    await WebHelper.DeleteAsync(@$"{SettingsViewModel.Instance.ServerUrl}/api/progresses/user/{ViewModel?.CurrentShownUser?.ID}/game/{dataContext?.Game.ID}");
                     //ToDo: Dirty but i dont want to use ObservableCollection only for this one action
                     List<Progress> copy = ViewModel.UserProgresses;
                     copy.Remove(dataContext);

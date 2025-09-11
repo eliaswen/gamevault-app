@@ -1,16 +1,18 @@
-﻿using System;
+﻿using gamevault.Helper;
+using gamevault.Models;
+using gamevault.UserControls;
+using gamevault.ViewModels;
+using System;
+using System.Collections;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
 using System.Security.Principal;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
-using gamevault.Helper;
-using gamevault.Models;
-using gamevault.UserControls;
-using gamevault.ViewModels;
 using Windows.Devices.Sms;
 
 namespace gamevault
@@ -69,7 +71,7 @@ namespace gamevault
                 _isReadyForCommands = value;
             }
         }
-
+        public bool IsAppStartup = true;
         private PipeServiceHandler()
         {
         }
@@ -411,7 +413,10 @@ namespace gamevault
                     // You should really implement new actions that you add
                     throw new NotImplementedException($"Action {options.Action} not implemented");
             }
-
+            if (IsAppStartup)
+            {
+                showMainWindow = !SettingsViewModel.Instance.BackgroundStart;
+            }
             if (options.Minimized.HasValue)
             {
                 // If we're provided a Minimized value then we can explicitly use that for whether or not to be shown
@@ -443,7 +448,7 @@ namespace gamevault
                 if (task != null)
                     await task;
             }
-
+            IsAppStartup = false;
             return null;
         }
 
@@ -455,14 +460,15 @@ namespace gamevault
         private async Task<Game?> GetInstalledGame(int id)
         {
             Game? game = null;
-            await Dispatch(async () =>
+            if (!InstallViewModel.Instance.InstalledGames.Any())
             {
-                if (!InstallViewModel.Instance.InstalledGames.Any())
+                try
                 {
-                    await MainWindowViewModel.Instance.Library.GetGameInstalls().RestoreInstalledGames();
+                    await MainWindowViewModel.Instance.Library.GetGameInstalls().RestoreInstalledGames(true);
                 }
-                game = InstallViewModel.Instance.InstalledGames.Where(g => g.Key.ID == id).Select(g => g.Key).FirstOrDefault();
-            });
+                catch { }
+            }
+            game = InstallViewModel.Instance.InstalledGames.Where(g => g.Key.ID == id).Select(g => g.Key).FirstOrDefault();
             return game;
         }
 
@@ -479,7 +485,7 @@ namespace gamevault
             {
                 try
                 {
-                    string result = await WebHelper.GetRequestAsync(@$"{SettingsViewModel.Instance.ServerUrl}/api/games/{id}");
+                    string result = await WebHelper.GetAsync(@$"{SettingsViewModel.Instance.ServerUrl}/api/games/{id}");
                     game = JsonSerializer.Deserialize<Game>(result);
                 }
                 catch (Exception)
@@ -492,7 +498,7 @@ namespace gamevault
             {
                 try
                 {
-                    string compressedStringObject = Preferences.Get(id.ToString(), AppFilePath.OfflineCache);
+                    string compressedStringObject = Preferences.Get(id.ToString(), LoginManager.Instance.GetUserProfile().OfflineCache);
                     if (!string.IsNullOrEmpty(compressedStringObject))
                     {
                         string decompressedObject = StringCompressor.DecompressString(compressedStringObject);
@@ -693,6 +699,11 @@ namespace gamevault
             /// </summary>
             IsLoggedIn,
 
+            /// <summary>
+            /// Returns all Games of the server the current profile is connected to
+            /// </summary>
+            GetAllGames
+
         }
 
         /// <summary>
@@ -768,6 +779,16 @@ namespace gamevault
                         var installDirectory = InstallViewModel.Instance.InstalledGames.Where(g => g.Key.ID == game.ID).Select(g => g.Value).FirstOrDefault();
 
                         return installDirectory ?? "";
+                    }
+                case ActionQueryEnum.GetAllGames:
+                    {
+                        try
+                        {
+                            string result = await WebHelper.GetAsync(@$"{SettingsViewModel.Instance.ServerUrl}/api/games?limit=-1");
+                            return Convert.ToBase64String(Encoding.UTF8.GetBytes(result));
+                        }
+                        catch { }
+                        return "";
                     }
                 case ActionQueryEnum.GetServerUrl:
                     return SettingsViewModel.Instance.ServerUrl;
